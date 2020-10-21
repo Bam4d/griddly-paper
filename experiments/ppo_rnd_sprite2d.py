@@ -170,9 +170,9 @@ if __name__ == "__main__":
 
     # Griddly arguments
     parser.add_argument('--griddly-level', type=int, default=0,
-                        help='the level number to train')
-    # parser.add_argument('--griddly-max-steps', type=int, default=10000,
-    #                     help='the max steps for the env')
+                        help='The level number to train')
+    parser.add_argument('--griddly-max-steps', type=int, default=128,
+                        help='the max steps for the env')
 
     # RND arguments
     parser.add_argument('--update-proportion', type=float, default=0.25,
@@ -193,6 +193,9 @@ class VecPyTorch(VecEnvWrapper):
     def __init__(self, venv, device):
         super(VecPyTorch, self).__init__(venv)
         self.device = device
+
+    def get_tile_size(self):
+        return self.venv.env_method('get_tile_size')[0]
 
     def reset(self):
         obs = self.venv.reset()
@@ -218,8 +221,6 @@ class ProbsVisualizationWrapper(gym.Wrapper):
         self.probs = [[0., 0., 0., 0.]]
         # self.metadata['video.frames_per_second'] = 60
 
-        self._scale = 20
-
         observation_channels = self.observation_space.shape[0]
         HSV_tuples = [(x * 1.0 / (observation_channels + 1), 1.0, 1.0) for x in range(observation_channels + 1)]
 
@@ -232,27 +233,11 @@ class ProbsVisualizationWrapper(gym.Wrapper):
     def set_probs(self, probs):
         self.probs = probs
 
-    def wrap_vector_visualization(self, observation):
-
-        observation = observation.swapaxes(0,2)
-        # add extra dimension so argmax does not get confused by 0 index and empty space
-        pallette_buffer = np.ones([observation.shape[0] + 1, *observation.shape[1:]]) * 0.5
-        pallette_buffer[1:] = observation
-
-        # convert to RGB pallette
-        vector_pallette = np.argmax(pallette_buffer, axis=0)
-
-        buffer = self._rgb_pallette[vector_pallette].swapaxes(0, 1)
-        # make the observation much bigger by repeating pixels
-        observation = buffer.repeat(self._scale, 0).repeat(self._scale, 1)
-
-        return observation
-
     def render(self, mode="human"):
         if mode == "rgb_array":
             dpi = 100
-            env_rgb_array = self.wrap_vector_visualization(super().render(mode, observer='global'))
-            fig, ax = plt.subplots(figsize=(self.image_shape[1]*self._scale/dpi, self.image_shape[0]*self._scale/dpi),
+            env_rgb_array = super().render(mode, observer='global')
+            fig, ax = plt.subplots(figsize=(self.image_shape[1] / dpi, self.image_shape[0] / dpi),
                                    constrained_layout=True, dpi=dpi)
             df = pd.DataFrame(np.array(self.probs).T)
             sns.barplot(x=df.index, y=0, data=df, ax=ax)
@@ -272,10 +257,12 @@ class ProbsVisualizationWrapper(gym.Wrapper):
 experiment_name = f"{args.gym_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
 writer = SummaryWriter(f"runs/{experiment_name}")
 writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
-        '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
+    '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
 if args.prod_mode:
     import wandb
-    run = wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, sync_tensorboard=True, config=vars(args), name=experiment_name, monitor_gym=True, save_code=True)
+
+    wandb.init(project=args.wandb_project_name, entity=args.wandb_entity, sync_tensorboard=True, config=vars(args),
+               name=experiment_name, monitor_gym=True, save_code=True)
     writer = SummaryWriter(f"/tmp/{experiment_name}")
 
 # TRY NOT TO MODIFY: seeding
@@ -285,27 +272,38 @@ np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.backends.cudnn.deterministic = args.torch_deterministic
 
+
 def make_env(args, seed, idx):
     def thunk():
-        env = gym.make(args.gym_id,
+
+        env = gym.make(
+            args.gym_id,
             level=args.griddly_level,
-            global_observer_type=gd.ObserverType.VECTOR,
-            player_observer_type=gd.ObserverType.VECTOR,)
+            global_observer_type=gd.ObserverType.SPRITE_2D,
+            player_observer_type=gd.ObserverType.SPRITE_2D,
+            max_steps=args.griddly_max_steps
+        )
         env.reset()
+
         # env = wrap_atari(env, sticky_action=args.sticky_action)
         env = gym.wrappers.RecordEpisodeStatistics(env)
+
         if args.capture_video:
             if idx == 0:
                 env = ProbsVisualizationWrapper(env)
                 env = Monitor(env, f'videos/{experiment_name}',
                               video_callable=lambda episode_id: episode_id % args.video_interval == 0)
+
         env.seed(seed)
         env.action_space.seed(seed)
         env.observation_space.seed(seed)
         return env
+
     return thunk
 
+
 envs = VecPyTorch(DummyVecEnv([make_env(args, args.seed + i, i) for i in range(args.num_envs)]), device)
+
 
 # some important useful layers for generic learning
 class Scale(nn.Module):
@@ -343,10 +341,12 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    def __init__(self, num_objects):
+    def __init__(self, tile_size):
         super(Agent, self).__init__()
         self.network = nn.Sequential(
-            layer_init(nn.Conv2d(num_objects, 32, 3, padding=1)),
+            layer_init(nn.Conv2d(3, 32, kernel_size=tile_size, stride=tile_size)),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(32, 32, 3, padding=1)),
             nn.ReLU(),
             layer_init(nn.Conv2d(32, 64, 3, padding=1)),
             nn.ReLU(),
@@ -387,12 +387,12 @@ class Agent(nn.Module):
 
 
 class RNDModel(nn.Module):
-    def __init__(self, num_objects):
+    def __init__(self, tile_size):
         super(RNDModel, self).__init__()
 
         # Prediction network
         self.predictor = nn.Sequential(
-            layer_init(nn.Conv2d(num_objects, 32, 3, padding=1)),
+            layer_init(nn.Conv2d(3, 32, kernel_size=tile_size, stride=tile_size)),
             nn.ReLU(),
             layer_init(nn.Conv2d(32, 64, 3, padding=1)),
             nn.ReLU(),
@@ -408,7 +408,7 @@ class RNDModel(nn.Module):
 
         # Target network
         self.target = nn.Sequential(
-            layer_init(nn.Conv2d(num_objects, 32, 3, padding=1)),
+            layer_init(nn.Conv2d(3, 32, kernel_size=tile_size, stride=tile_size)),
             nn.ReLU(),
             layer_init(nn.Conv2d(32, 64, 3, padding=1)),
             nn.ReLU(),
@@ -433,12 +433,11 @@ class RNDModel(nn.Module):
         return predict_feature, target_feature
 
 
-# The number of objects in the griddly environment is the size of the channels in the VECTOR observer
-num_objects = envs.observation_space.shape[0]
+tile_size = envs.get_tile_size()
 
-agent = Agent(num_objects).to(device)
+agent = Agent(tile_size).to(device)
 
-rnd_model = RNDModel(num_objects).to(device)
+rnd_model = RNDModel(tile_size).to(device)
 
 optimizer = optim.Adam(list(agent.parameters()) + list(rnd_model.predictor.parameters()), lr=args.learning_rate,
                        eps=1e-5)
@@ -584,7 +583,7 @@ for update in range(1, num_updates + 1):
 
     # Optimizaing the policy and value network
     forward_mse = nn.MSELoss(reduction='none')
-    target_agent = Agent(num_objects).to(device)
+    target_agent = Agent(tile_size).to(device)
     inds = np.arange(args.batch_size, )
 
     rnd_next_obs = torch.FloatTensor(((b_obs.data.cpu().numpy() - obs_rms.mean) / np.sqrt(obs_rms.var)).clip(-5, 5)).to(
