@@ -173,6 +173,12 @@ if __name__ == "__main__":
                         help='the level number to train')
     parser.add_argument('--griddly-max-steps', type=int, default=128,
                         help='the max steps for the env')
+    parser.add_argument('--train-levels', nargs='+', default=[0,1,2],
+                        help='the levels to train on')
+    parser.add_argument('--eval-levels', nargs='+', default=[3,4],
+                        help='the levels to evaluate')
+    parser.add_argument('--eval-frequency', type=int, default=1,
+                        help='frequency to evaluate')
 
     # RND arguments
     parser.add_argument('--update-proportion', type=float, default=0.25,
@@ -188,6 +194,14 @@ if __name__ == "__main__":
 args.batch_size = int(args.num_envs * args.num_steps)
 args.minibatch_size = int(args.batch_size // args.n_minibatch)
 
+class GriddlyLevelsSwitcher(gym.Wrapper):
+    def __init__(self, env, levels):
+        super().__init__(env)
+        self.levels = levels
+    
+    def reset(self):
+        selected_level = np.random.choice(self.levels)
+        return self.env.reset(selected_level)
 
 class VecPyTorch(VecEnvWrapper):
     def __init__(self, venv, device):
@@ -289,7 +303,7 @@ torch.manual_seed(args.seed)
 torch.backends.cudnn.deterministic = args.torch_deterministic
 
 
-def make_env(args, seed, idx):
+def make_env(args, seed, idx, levels, mode):
     def thunk():
         env = gym.make(
             args.gym_id,
@@ -299,23 +313,24 @@ def make_env(args, seed, idx):
             max_steps=args.griddly_max_steps
         )
         env.reset()
+        env = GriddlyLevelsSwitcher(env, levels)
         # env = wrap_atari(env, sticky_action=args.sticky_action)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if args.capture_video:
             if idx == 0:
                 env = ProbsVisualizationWrapper(env)
-                env = Monitor(env, f'videos/{experiment_name}',
+                env = Monitor(env, f'videos/{experiment_name}/{mode}',
                               video_callable=lambda episode_id: episode_id % args.video_interval == 0)
         env.seed(seed)
         env.action_space.seed(seed)
         env.observation_space.seed(seed)
         return env
-
     return thunk
 
 
-envs = VecPyTorch(DummyVecEnv([make_env(args, args.seed + i, i) for i in range(args.num_envs)]), device)
-
+envs = VecPyTorch(DummyVecEnv([make_env(args, args.seed + i, i, args.train_levels, "train") for i in range(args.num_envs)]), device)
+eval_envs = VecPyTorch(DummyVecEnv([make_env(args, args.seed + i, i, args.eval_levels, "eval") for i in range(1)]), device)
+eval_next_obs = eval_envs.reset()
 
 # some important useful layers for generic learning
 class Scale(nn.Module):
@@ -488,6 +503,7 @@ for update in range(1, num_updates + 1):
 
     # TRY NOT TO MODIFY: prepare the execution of the game.
     for step in range(0, args.num_steps):
+        # envs.env_method("render", indices=0)
         global_step += 1 * args.num_envs
         obs[step] = next_obs
         dones[step] = next_done
@@ -672,5 +688,33 @@ for update in range(1, num_updates + 1):
     if args.kle_stop or args.kle_rollback:
         writer.add_scalar("debug/pg_stop_iter", i_epoch_pi, global_step)
 
+    # EVALUATION:
+    if update % args.eval_frequency == 0:
+        while True:
+            with torch.no_grad():
+                action, _, _ = agent.get_action(eval_next_obs)
+                # visualization
+                if args.capture_video:
+                    probs_list = np.array(Categorical(
+                        logits=agent.actor(agent.forward(eval_next_obs))).probs[0:1].tolist())
+                    eval_envs.env_method("set_probs", probs_list, indices=0)
+
+            # TRY NOT TO MODIFY: execute the game and log data.
+            eval_next_obs, _, _, infos = eval_envs.step(action)
+            rnd_next_obs = torch.FloatTensor(
+                ((eval_next_obs.data.cpu().numpy() - obs_rms.mean) / np.sqrt(obs_rms.var)).clip(-5, 5)).to(device)
+            target_next_feature = rnd_model.target(rnd_next_obs)
+            predict_next_feature = rnd_model.predictor(rnd_next_obs)
+            curiosity_reward = ((target_next_feature - predict_next_feature).pow(2).sum(1) / 2).data.cpu()
+
+            info = infos[0]
+            if 'episode' in info.keys():
+                print(
+                    f"global_step={global_step}, eval/episode_reward={info['episode']['r']}, eval/curiosity_reward={curiosity_reward[0]}")
+                writer.add_scalar("eval/charts/episode_reward", info['episode']['r'], global_step)
+                writer.add_scalar("eval/charts/episode_curiosity_reward", curiosity_reward[0], global_step)
+                break
+         
+eval_envs.close()
 envs.close()
 writer.close()
