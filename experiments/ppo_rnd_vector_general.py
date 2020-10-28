@@ -107,7 +107,7 @@ if __name__ == "__main__":
     # Common arguments
     parser.add_argument('--exp-name', type=str, default=os.path.basename(__file__).rstrip(".py"),
                         help='the name of this experiment')
-    parser.add_argument('--gym-id', type=str, default="GDY-Clusters-v0",
+    parser.add_argument('--gym-id', type=str, default="GDY-Partially-Observable-Bait-v0",
                         help='the id of the gym environment')
     parser.add_argument('--learning-rate', type=float, default=2.5e-4,
                         help='the learning rate of the optimizer')
@@ -228,7 +228,6 @@ class ProbsVisualizationWrapper(gym.Wrapper):
     def __init__(self, env):
         super().__init__(env)
         self.env.reset()
-        self.image_shape = self.env.render(mode="rgb_array", observer='global').shape
         self.probs = [[0., 0., 0., 0.]]
         # self.metadata['video.frames_per_second'] = 60
 
@@ -267,7 +266,7 @@ class ProbsVisualizationWrapper(gym.Wrapper):
             dpi = 100
             env_rgb_array = self.wrap_vector_visualization(super().render(mode, observer='global'))
             fig, ax = plt.subplots(
-                figsize=(self.image_shape[1] * self._scale / dpi, self.image_shape[0] * self._scale / dpi),
+                figsize=(env_rgb_array.shape[1] / dpi, env_rgb_array.shape[0] / dpi),
                 constrained_layout=True, dpi=dpi)
             df = pd.DataFrame(np.array(self.probs).T)
             sns.barplot(x=df.index, y=0, data=df, ax=ax)
