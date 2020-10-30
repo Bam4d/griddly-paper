@@ -223,11 +223,12 @@ class VecPyTorch(VecEnvWrapper):
         reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
         return obs, reward, done, info
 
+class PartialObservationVisualizationWrapper(gym.Wrapper):
 
-class ProbsVisualizationWrapper(gym.Wrapper):
     def __init__(self, env):
         super().__init__(env)
         self.env.reset()
+        self.image_shape = self.env.render(mode="rgb_array", observer='global').shape
         self.probs = [[0., 0., 0., 0.]]
         # self.metadata['video.frames_per_second'] = 60
 
@@ -241,9 +242,6 @@ class ProbsVisualizationWrapper(gym.Wrapper):
             rgb.append(colorsys.hsv_to_rgb(*hsv))
 
         self._rgb_pallette = (np.array(rgb) * 255).astype('uint8')
-
-    def set_probs(self, probs):
-        self.probs = probs
 
     def wrap_vector_visualization(self, observation):
 
@@ -260,27 +258,19 @@ class ProbsVisualizationWrapper(gym.Wrapper):
         observation = buffer.repeat(self._scale, 0).repeat(self._scale, 1)
 
         return observation
-
+    
     def render(self, mode="human"):
         if mode == "rgb_array":
-            dpi = 100
-            env_rgb_array = self.wrap_vector_visualization(super().render(mode, observer='global'))
-            fig, ax = plt.subplots(
-                figsize=(env_rgb_array.shape[1] / dpi, env_rgb_array.shape[0] / dpi),
-                constrained_layout=True, dpi=dpi)
-            df = pd.DataFrame(np.array(self.probs).T)
-            sns.barplot(x=df.index, y=0, data=df, ax=ax)
-            ax.set(xlabel='actions', ylabel='probs')
-            fig.canvas.draw()
-            X = np.array(fig.canvas.renderer.buffer_rgba())
-            Image.fromarray(X)
-            rgb_image = np.array(Image.fromarray(X).convert('RGB'))
-            plt.close(fig)
-            q_value_rgb_array = rgb_image
-            return np.append(env_rgb_array, q_value_rgb_array, axis=1)
+            global_rendering = self.wrap_vector_visualization(super().render(mode, observer='global'))
+            partial_rendering =self. wrap_vector_visualization(super().render(mode))
+            partial_rendering = cv2.resize(
+                partial_rendering, (global_rendering.shape[0], global_rendering.shape[0]), interpolation=cv2.INTER_AREA
+            )
+            # print(global_rendering.shape, partial_rendering.shape)
+            # raise
+            return np.concatenate((global_rendering, partial_rendering), 1)
         else:
             super().render(mode)
-
 
 # TRY NOT TO MODIFY: setup the environment
 experiment_name = f"{args.gym_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
@@ -317,7 +307,7 @@ def make_env(args, seed, idx, levels, mode):
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if args.capture_video:
             if idx == 0:
-                env = ProbsVisualizationWrapper(env)
+                env = PartialObservationVisualizationWrapper(env)
                 env = Monitor(env, f'videos/{experiment_name}/{mode}',
                               video_callable=lambda episode_id: episode_id % args.video_interval == 0)
         env.seed(seed)
@@ -513,12 +503,6 @@ for update in range(1, num_updates + 1):
             ext_values[step], int_values[step] = value_ext.flatten(), value_int.flatten()
             action, logproba, _ = agent.get_action(obs[step])
 
-            # visualization
-            if args.capture_video:
-                probs_list = np.array(Categorical(
-                    logits=agent.actor(agent.forward(obs[step]))).probs[0:1].tolist())
-                envs.env_method("set_probs", probs_list, indices=0)
-
         actions[step] = action
         logprobs[step] = logproba
 
@@ -692,12 +676,6 @@ for update in range(1, num_updates + 1):
         while True:
             with torch.no_grad():
                 action, _, _ = agent.get_action(eval_next_obs)
-                # visualization
-                if args.capture_video:
-                    probs_list = np.array(Categorical(
-                        logits=agent.actor(agent.forward(eval_next_obs))).probs[0:1].tolist())
-                    eval_envs.env_method("set_probs", probs_list, indices=0)
-
             # TRY NOT TO MODIFY: execute the game and log data.
             eval_next_obs, _, _, infos = eval_envs.step(action)
             rnd_next_obs = torch.FloatTensor(
