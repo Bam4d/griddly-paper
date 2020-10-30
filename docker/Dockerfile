@@ -53,6 +53,7 @@ RUN git clone https://github.com/vwxyzjn/cleanrl && \
     cd cleanrl && pip3 install -e .
 
 RUN pip3 install wandb==0.9.5
+RUN pip3 install griddly --upgrade
 
 COPY entrypoint.sh /usr/local/bin/
 RUN chmod 777 /usr/local/bin/entrypoint.sh
