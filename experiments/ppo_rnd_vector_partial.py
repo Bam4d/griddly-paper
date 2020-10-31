@@ -201,7 +201,7 @@ class GriddlyLevelsSwitcher(gym.Wrapper):
     
     def reset(self):
         selected_level = np.random.choice(self.levels)
-        return self.env.reset(selected_level)
+        return self.env.reset(level_id=selected_level)
 
 class VecPyTorch(VecEnvWrapper):
     def __init__(self, venv, device):
@@ -299,10 +299,11 @@ def make_env(args, seed, idx, levels, mode):
             level=args.griddly_level,
             global_observer_type=gd.ObserverType.VECTOR,
             player_observer_type=gd.ObserverType.VECTOR,
-            max_steps=args.griddly_max_steps
         )
         env.reset()
         env = GriddlyLevelsSwitcher(env, levels)
+        env = TimeLimit(env, max_episode_steps=args.griddly_max_steps)
+
         # env = wrap_atari(env, sticky_action=args.sticky_action)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if args.capture_video:
@@ -318,7 +319,7 @@ def make_env(args, seed, idx, levels, mode):
 
 
 envs = VecPyTorch(DummyVecEnv([make_env(args, args.seed + i, i, args.train_levels, "train") for i in range(args.num_envs)]), device)
-eval_envs = VecPyTorch(DummyVecEnv([make_env(args, args.seed + i, i, args.eval_levels, "eval") for i in range(1)]), device)
+eval_envs = VecPyTorch(DummyVecEnv([make_env(args, args.seed + i, i, args.eval_levels, "eval") for i in range(args.num_envs)]), device)
 eval_next_obs = eval_envs.reset()
 
 # some important useful layers for generic learning
