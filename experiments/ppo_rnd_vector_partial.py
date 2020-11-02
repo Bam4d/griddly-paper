@@ -174,9 +174,9 @@ if __name__ == "__main__":
                         help='the level number to train')
     parser.add_argument('--griddly-max-steps', type=int, default=128,
                         help='the max steps for the env')
-    parser.add_argument('--train-levels', nargs='+', default=[0,1,2],
+    parser.add_argument('--train-levels', nargs='+', default=[0, 2, 4],
                         help='the levels to train on')
-    parser.add_argument('--eval-levels', nargs='+', default=[3,4],
+    parser.add_argument('--eval-levels', nargs='+', default=[1, 3],
                         help='the levels to evaluate')
     parser.add_argument('--eval-frequency', type=int, default=10,
                         help='frequency to evaluate')
@@ -199,10 +199,11 @@ class GriddlyLevelsSwitcher(gym.Wrapper):
     def __init__(self, env, levels):
         super().__init__(env)
         self.levels = levels
-    
+
     def reset(self):
         selected_level = np.random.choice(self.levels)
         return self.env.reset(level_id=selected_level)
+
 
 class VecPyTorch(VecEnvWrapper):
     def __init__(self, venv, device):
@@ -223,6 +224,7 @@ class VecPyTorch(VecEnvWrapper):
         obs = torch.from_numpy(obs).float().to(self.device)
         reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
         return obs, reward, done, info
+
 
 class PartialObservationVisualizationWrapper(gym.Wrapper):
 
@@ -259,11 +261,11 @@ class PartialObservationVisualizationWrapper(gym.Wrapper):
         observation = buffer.repeat(self._scale, 0).repeat(self._scale, 1)
 
         return observation
-    
+
     def render(self, mode="human"):
         if mode == "rgb_array":
             global_rendering = self.wrap_vector_visualization(super().render(mode, observer='global'))
-            partial_rendering =self. wrap_vector_visualization(super().render(mode))
+            partial_rendering = self.wrap_vector_visualization(super().render(mode))
             partial_rendering = cv2.resize(
                 partial_rendering, (global_rendering.shape[0], global_rendering.shape[0]), interpolation=cv2.INTER_AREA
             )
@@ -273,8 +275,10 @@ class PartialObservationVisualizationWrapper(gym.Wrapper):
         else:
             super().render(mode)
 
+
 # TRY NOT TO MODIFY: setup the environment
 experiment_name = f"{args.gym_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+ts = f'{int(time.time())}'
 writer = SummaryWriter(f"runs/{experiment_name}")
 writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
     '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
@@ -310,17 +314,22 @@ def make_env(args, seed, idx, levels, mode):
         if args.capture_video:
             env = PartialObservationVisualizationWrapper(env)
             if mode == 'eval':
-                env = Monitor(env, f'videos/{experiment_name}/{levels[0]}/{mode}',
+                filename = f'videos/{ts}/{levels[0]}'
+                env = Monitor(env, filename,
                               video_callable=lambda episode_id: True)
         env.seed(seed)
         env.action_space.seed(seed)
         env.observation_space.seed(seed)
         return env
+
     return thunk
 
 
-envs = VecPyTorch(DummyVecEnv([make_env(args, args.seed + i, i, args.train_levels, "train") for i in range(args.num_envs)]), device)
-eval_envs = VecPyTorch(DummyVecEnv([make_env(args, args.seed + i, i, [args.eval_levels[i]], "eval") for i in range(len(args.eval_levels))]), device)
+envs = VecPyTorch(
+    DummyVecEnv([make_env(args, args.seed + i, i, args.train_levels, "train") for i in range(args.num_envs)]), device)
+eval_envs = VecPyTorch(DummyVecEnv(
+    [make_env(args, args.seed + i, i, [args.eval_levels[i]], "eval") for i in range(len(args.eval_levels))]), device)
+eval_next_obs = eval_envs.reset()
 
 # some important useful layers for generic learning
 class Scale(nn.Module):
@@ -681,9 +690,9 @@ for update in range(1, num_updates + 1):
         eval_curiosity_rewards = defaultdict(list)
 
         for r in range(repeats):
-            eval_next_obs = eval_envs.reset()
             s = 0
-            while s < args.griddly_max_steps:
+            num_dones = 0
+            while True:
                 with torch.no_grad():
                     action, _, _ = agent.get_action(eval_next_obs)
                 # TRY NOT TO MODIFY: execute the game and log data.
@@ -694,11 +703,16 @@ for update in range(1, num_updates + 1):
                 predict_next_feature = rnd_model.predictor(rnd_next_obs)
                 curiosity_reward = ((target_next_feature - predict_next_feature).pow(2).sum(1) / 2).data.cpu()
 
+
                 for e in range(num_eval_levels):
                     info = infos[e]
                     if 'episode' in info.keys():
                         eval_rewards[e].append(info['episode']['r'])
                         eval_curiosity_rewards[e].append(curiosity_reward[0])
+
+                        num_dones += 1
+                if num_dones == num_eval_levels:
+                    break
                 s += 1
 
         for e in range(num_eval_levels):
@@ -708,7 +722,7 @@ for update in range(1, num_updates + 1):
                 f"global_step={global_step}, eval/{e}/episode_reward={mean_epsiode_reward}, eval/{e}/curiosity_reward={mean_epsiode_curiosity_reward}")
             writer.add_scalar(f"eval/charts/{e}/episode_reward", mean_epsiode_reward, global_step)
             writer.add_scalar(f"eval/charts/{e}/episode_curiosity_reward", mean_epsiode_curiosity_reward, global_step)
-         
+
 eval_envs.close()
 envs.close()
 writer.close()
