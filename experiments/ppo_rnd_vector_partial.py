@@ -711,7 +711,7 @@ for update in range(1, num_updates + 1):
                         eval_curiosity_rewards[e].append(curiosity_reward[0])
 
                         num_dones += 1
-                if num_dones == num_eval_levels:
+                if num_dones >= num_eval_levels:
                     break
                 s += 1
 
