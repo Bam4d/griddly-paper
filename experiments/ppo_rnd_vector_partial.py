@@ -685,7 +685,7 @@ for update in range(1, num_updates + 1):
     if update % args.eval_frequency == 0:
 
         num_eval_levels = len(args.eval_levels)
-        repeats = 1
+        repeats = 20
         eval_rewards = defaultdict(list)
         eval_curiosity_rewards = defaultdict(list)
 
@@ -717,10 +717,12 @@ for update in range(1, num_updates + 1):
 
         for e in range(num_eval_levels):
             mean_epsiode_reward = np.mean(eval_rewards[e])
+            std_epsiode_reward = np.std(eval_rewards[e])
             mean_epsiode_curiosity_reward = np.mean(eval_curiosity_rewards[e])
             print(
                 f"global_step={global_step}, eval/{e}/episode_reward={mean_epsiode_reward}, eval/{e}/curiosity_reward={mean_epsiode_curiosity_reward}")
-            writer.add_scalar(f"eval/charts/{e}/episode_reward", mean_epsiode_reward, global_step)
+            writer.add_scalar(f"eval/charts/{e}/episode_reward_mean", mean_epsiode_reward, global_step)
+            writer.add_scalar(f"eval/charts/{e}/episode_reward_std", std_epsiode_reward, global_step)
             writer.add_scalar(f"eval/charts/{e}/episode_curiosity_reward", mean_epsiode_curiosity_reward, global_step)
 
 eval_envs.close()
