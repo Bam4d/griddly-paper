@@ -685,7 +685,7 @@ for update in range(1, num_updates + 1):
     if update % args.eval_frequency == 0:
 
         num_eval_levels = len(args.eval_levels)
-        repeats = 20
+        repeats = 10
         eval_rewards = defaultdict(list)
         eval_curiosity_rewards = defaultdict(list)
 
