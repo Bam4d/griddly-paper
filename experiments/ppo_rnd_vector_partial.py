@@ -124,7 +124,7 @@ if __name__ == "__main__":
                         help='run the script in production mode and use wandb to log outputs')
     parser.add_argument('--capture-video', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
                         help='weather to capture videos of the agent performances (check out `videos` folder)')
-    parser.add_argument('--video-interval', type=int, default=50,
+    parser.add_argument('--video-interval', type=int, default=20,
                         help='the episode interval for capturing video')
     parser.add_argument('--wandb-project-name', type=str, default="cleanRL",
                         help="the wandb's project name")
@@ -316,7 +316,7 @@ def make_env(args, seed, idx, levels, mode):
             if mode == 'eval':
                 filename = f'videos/{ts}/{levels[0]}'
                 env = Monitor(env, filename,
-                              video_callable=lambda episode_id: True)
+                              video_callable=lambda episode_id: episode_id % args.video_interval == 0)
         env.seed(seed)
         env.action_space.seed(seed)
         env.observation_space.seed(seed)
