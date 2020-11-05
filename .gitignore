@@ -7,7 +7,7 @@ experiments/mask/*
 state.json
 
 **/wandb/*
-
+plots/charts_episode_reward/*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

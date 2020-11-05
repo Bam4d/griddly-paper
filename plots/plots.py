@@ -11,11 +11,11 @@ from distutils.util import strtobool
 
 parser = argparse.ArgumentParser(description='CleanRL Plots')
 # Common arguments
-parser.add_argument('--wandb-project', type=str, default="anonymous-rl-code/action-guidance",
+parser.add_argument('--wandb-project', type=str, default="griddly/griddly-paper-single-env",
                    help='the name of wandb project (e.g. cleanrl/cleanrl)')
-parser.add_argument('--feature-of-interest', type=str, default='charts/episode_reward/ProduceCombatUnitRewardFunction',
+parser.add_argument('--feature-of-interest', type=str, default='charts/episode_reward',
                    help='which feature to be plotted on the y-axis')
-parser.add_argument('--hyper-params-tuned', nargs='+', default= ['shift', 'adaptation'],
+parser.add_argument('--hyper-params-tuned', nargs='+', default=[],
                     help='the hyper parameters tuned')
 # parser.add_argument('--scan-history', type=lambda x:bool(strtobool(x)), default=False, nargs='?', const=True,
 #                     help='if toggled, cuda will not be enabled by default')
@@ -25,7 +25,7 @@ parser.add_argument('--samples', type=int, default=500,
                     help='the sampled point of the run')
 parser.add_argument('--smooth-weight', type=float, default=0.90,
                     help='the weight parameter of the exponential moving average')
-parser.add_argument('--last-n-episodes', type=int, default=50,
+parser.add_argument('--last-n-episodes', type=int, default=2,
                    help='for analysis only; the last n episodes from which the mean of the feature of interest is calculated')
 parser.add_argument('--num-points-x-axis', type=int, default=500,
                    help='the number of points in the x-axis')
@@ -44,19 +44,16 @@ api = wandb.Api()
 
 # hacks
 env_dict = {
-    'MicrortsAttackShapedReward-v1': 'MicrortsAttackHRL-v1',
-    'MicrortsProduceCombatUnitsShapedReward-v1':  'MicrortsProduceCombatUnitHRL-v1',
-    'MicrortsRandomEnemyShapedReward3-v1': 'MicrortsRandomEnemyHRL3-v1',
 }
 exp_convert_dict = {
-    'ppo_positive_reward-positive_likelihood-0-': 'sparse reward w/ PLO',
-    'ppo': 'sparse reward',
-    'ppo_ac_positive_reward-shift-2000000--adaptation-2000000--positive_likelihood-0-': 'action guidance - multi-agent  w/ PLO',
-    'ppo_ac_positive_reward-shift-2000000--adaptation-7000000--positive_likelihood-0-': 'action guidance - long adaptation w/ PLO',
-    'ppo_ac_positive_reward-shift-800000--adaptation-1000000--positive_likelihood-0-': 'action guidance - short adaptation w/ PLO',
-    'ppo_ac_positive_reward-shift-2000000--adaptation-7000000--positive_likelihood-1-': 'action guidance - long adaptation',
-    'ppo_ac_positive_reward-shift-800000--adaptation-1000000--positive_likelihood-1-': 'action guidance - short adaptation',
-    'pposhaped': 'shaped reward',
+}
+name_conversion_dict = {
+    'Bait-Keys': 'Bait-With-Keys',
+    'Cookmepasta': 'Cook-Me-Pasta',
+    'Labyrinth-Partially-Observable': 'Partially-Observable-Labyrinth',
+    'Zenpuzzle-Partially-Observable': 'Partially-Observable-Zen-Puzzle',
+    'Sokoban2': 'Sokoban---2',
+    'Zenpuzzle': 'Zen-Puzzle'
 }
 
 # args.feature_of_interest = 'charts/episode_reward'
@@ -87,9 +84,17 @@ if not path.exists(f"{feature_name}/all_df_cache.pkl"):
                     exp_name += "-" + param + "-" + str(run.config[param]) + "-"
             
             # hacks
-            if run.config["gym_id"] in env_dict:
-                exp_name += "shaped"
-                run.config["gym_id"] = env_dict[run.config["gym_id"]]
+            griddly_level = run.config['griddly_level']
+            if "gym_id" not in run.config:
+                griddly_gdy_filename = run.config['griddly_gdy_file']
+                name = os.path.basename(griddly_gdy_filename).replace('.yaml', '')
+                name = name.replace("_", "-")
+                name = name.title()
+                if name in name_conversion_dict:
+                    name = name_conversion_dict[name]
+                env_name = f'GDY-{name}-v0'
+                run.config["gym_id"] = env_name
+            run.config["gym_id"] += f"-{griddly_level}"
             
             metrics_dataframe.insert(len(metrics_dataframe.columns), "algo", exp_name)
             exp_names += [exp_name]
@@ -186,7 +191,10 @@ def export_legend(ax, filename="legend.pdf"):
 
     legend = ax2.legend(handles=handles[1:], labels=labels[1:], frameon=False, loc='lower center', ncol=3, fontsize=20, handlelength=1)
     for text in legend.get_texts():
-        text.set_text(exp_convert_dict[text.get_text()])
+        if text.get_text() in exp_convert_dict:
+            text.set_text(exp_convert_dict[text.get_text()])
+        else:
+            text.set_text(text.get_text())
     for line in legend.get_lines():
         line.set_linewidth(4.0)
     fig  = legend.figure
@@ -248,15 +256,21 @@ for env in set(all_df["gym_id"]):
     
     for algo in interested_exp_names:
         algo_data = data.loc[data['algo'].isin([algo])]
-        last_n_episodes_global_step = sorted(algo_data["global_step"].unique())[-args.last_n_episodes]
-        last_n_episodes_features = algo_data[algo_data['global_step'] > last_n_episodes_global_step].groupby(
-            ['seed']
-        ).mean()[args.feature_of_interest]
-        
-        for item in last_n_episodes_features:
-            stats[args.feature_of_interest] += [item]
-            stats['exp_name'] += [exp_convert_dict[algo]]
-            stats['gym_id'] += [env]
+        if len(algo_data) != 0:
+            last_n_episodes_global_step = sorted(algo_data["global_step"].unique())[-args.last_n_episodes]
+            last_n_episodes_features = algo_data[algo_data['global_step'] > last_n_episodes_global_step].groupby(
+                ['seed']
+            ).mean()[args.feature_of_interest]
+            
+            for item in last_n_episodes_features:
+                stats[args.feature_of_interest] += [item]
+                if algo in exp_convert_dict:
+                    stats['exp_name'] += [exp_convert_dict[algo]]
+                else:
+                    stats['exp_name'] += [algo]
+                stats['gym_id'] += [env]
+            if env == "GDY-Bait-With-Keys-v0":
+                print("=================", env, algo, item)
 
 # export legend
 ax = sns.lineplot(data=legend_df, x="global_step", y=args.feature_of_interest, hue="algo", ci='sd', palette=current_palette_dict,)
@@ -271,5 +285,5 @@ stats_df = pd.DataFrame(stats)
 g = stats_df.groupby(
     ['gym_id','exp_name']
 ).agg(lambda x: f"{np.mean(x):.2f} ± {np.std(x):.2f}")
-print(g.reset_index().pivot('exp_name', 'gym_id' , args.feature_of_interest).to_latex().replace("±", "$\pm$"))
+print(g.reset_index().pivot('gym_id', 'exp_name', args.feature_of_interest).to_latex().replace("±", "$\pm$"))
     
