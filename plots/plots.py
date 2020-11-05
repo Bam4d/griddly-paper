@@ -47,6 +47,14 @@ env_dict = {
 }
 exp_convert_dict = {
 }
+name_conversion_dict = {
+    'Bait-Keys': 'Bait-With-Keys',
+    'Cookmepasta': 'Cook-Me-Pasta',
+    'Labyrinth-Partially-Observable': 'Partially-Observable-Labyrinth',
+    'Zenpuzzle-Partially-Observable': 'Partially-Observable-Zen-Puzzle',
+    'Sokoban2': 'Sokoban---2',
+    'Zenpuzzle': 'Zen-Puzzle'
+}
 
 # args.feature_of_interest = 'charts/episode_reward'
 feature_name = args.feature_of_interest.replace("/", "_")
@@ -76,12 +84,17 @@ if not path.exists(f"{feature_name}/all_df_cache.pkl"):
                     exp_name += "-" + param + "-" + str(run.config[param]) + "-"
             
             # hacks
+            griddly_level = run.config['griddly_level']
             if "gym_id" not in run.config:
                 griddly_gdy_filename = run.config['griddly_gdy_file']
-                griddly_level = run.config['griddly_level']
                 name = os.path.basename(griddly_gdy_filename).replace('.yaml', '')
-                env_name = f'Griddly-{name}-{griddly_level}'
+                name = name.replace("_", "-")
+                name = name.title()
+                if name in name_conversion_dict:
+                    name = name_conversion_dict[name]
+                env_name = f'GDY-{name}-v0'
                 run.config["gym_id"] = env_name
+            run.config["gym_id"] += f"-{griddly_level}"
             
             metrics_dataframe.insert(len(metrics_dataframe.columns), "algo", exp_name)
             exp_names += [exp_name]
@@ -256,6 +269,8 @@ for env in set(all_df["gym_id"]):
                 else:
                     stats['exp_name'] += [algo]
                 stats['gym_id'] += [env]
+            if env == "GDY-Bait-With-Keys-v0":
+                print("=================", env, algo, item)
 
 # export legend
 ax = sns.lineplot(data=legend_df, x="global_step", y=args.feature_of_interest, hue="algo", ci='sd', palette=current_palette_dict,)
