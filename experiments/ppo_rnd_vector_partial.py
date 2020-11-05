@@ -314,11 +314,9 @@ def make_env(args, seed, idx, levels, mode):
         if args.capture_video:
             env = PartialObservationVisualizationWrapper(env)
             if mode == 'eval':
-                env = Monitor(env, f'videos/{experiment_name}/{levels[0]}',
+                filename = f'videos/{ts}/{levels[0]}'
+                env = Monitor(env, filename,
                               video_callable=lambda episode_id: True)
-            else:
-                env = Monitor(env, f'videos/{experiment_name}',
-                              video_callable=lambda episode_id: episode_id % args.video_interval == 0)    
         env.seed(seed)
         env.action_space.seed(seed)
         env.observation_space.seed(seed)
